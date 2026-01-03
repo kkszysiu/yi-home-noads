@@ -13,7 +13,7 @@ if [ ! -d "$DECOMPILED_DIR" ]; then
     exit 1
 fi
 
-echo "=== Yi Home Ad Removal Patcher ==="
+echo "=== Yi Home Ad & Cloud Popup Removal Patcher ==="
 echo "Working directory: $DECOMPILED_DIR"
 
 # Find SplashActivity.smali
@@ -38,9 +38,29 @@ else
     echo "Found: $ANTS_APP_B"
 fi
 
+# Find cloud-related files
+echo ""
+echo ">>> Looking for cloud popup files..."
+FREE_CLOUD_DIALOG=$(find "$DECOMPILED_DIR" -name "FreeCloudDialogFragment.smali" -path "*/kamicloud/features/*" | head -1)
+CLOUD_INTRO_ACTIVITY=$(find "$DECOMPILED_DIR" -name "CloudIntroductionsActivity.smali" -path "*/kamicloud/features/*" | head -1)
+NO_CLOUD_INTRO_ACTIVITY=$(find "$DECOMPILED_DIR" -name "NoCloudIntroductionsActivity.smali" -path "*/kamicloud/features/*" | head -1)
+CLOUD_FEATURES_ACTIVITY=$(find "$DECOMPILED_DIR" -name "CloudFeaturesActivity.smali" -path "*/kamicloud/features/*" | head -1)
+SMART_AI_DIALOG=$(find "$DECOMPILED_DIR" -name "SmartAIPurchaseDialog.smali" -path "*/kamicloud/features/*" | head -1)
+
+[ -n "$FREE_CLOUD_DIALOG" ] && echo "Found: $FREE_CLOUD_DIALOG"
+[ -n "$CLOUD_INTRO_ACTIVITY" ] && echo "Found: $CLOUD_INTRO_ACTIVITY"
+[ -n "$NO_CLOUD_INTRO_ACTIVITY" ] && echo "Found: $NO_CLOUD_INTRO_ACTIVITY"
+[ -n "$CLOUD_FEATURES_ACTIVITY" ] && echo "Found: $CLOUD_FEATURES_ACTIVITY"
+[ -n "$SMART_AI_DIALOG" ] && echo "Found: $SMART_AI_DIALOG"
+
 # Export variables for Python
 export SPLASH_ACTIVITY
 export ANTS_APP_B
+export FREE_CLOUD_DIALOG
+export CLOUD_INTRO_ACTIVITY
+export NO_CLOUD_INTRO_ACTIVITY
+export CLOUD_FEATURES_ACTIVITY
+export SMART_AI_DIALOG
 
 # Patch SplashActivity.smali - modify g2() method to skip ads
 echo ""
@@ -56,25 +76,18 @@ with open(splash_file, 'r') as f:
     content = f.read()
 
 # Find and patch the g2() method - this is the main ad orchestration method
-# We look for .method followed by g2()V and replace its body
-
 g2_pattern = r'(\.method\s+(?:private|public)?\s*(?:final\s+)?g2\(\)V.*?\.locals\s+\d+)'
 g2_match = re.search(g2_pattern, content, re.DOTALL)
 
 if g2_match:
-    # Find the full method
     method_start = content.find('.method', g2_match.start())
     method_end = content.find('.end method', g2_match.start())
 
     if method_start != -1 and method_end != -1:
         old_method = content[method_start:method_end + len('.end method')]
-
-        # Extract method signature line
         method_lines = old_method.split('\n')
         method_sig = method_lines[0]
 
-        # Create patched method that skips ads
-        # Call f2(true) to proceed past splash, then k2() for initialization, then return
         new_method = f'''{method_sig}
     .locals 1
 
@@ -89,7 +102,7 @@ if g2_match:
 .end method'''
 
         content = content.replace(old_method, new_method)
-        print(f"Patched g2() method in SplashActivity")
+        print("Patched g2() method in SplashActivity")
     else:
         print("Warning: Could not find g2() method boundaries")
 else:
@@ -115,15 +128,11 @@ ants_file = os.environ['ANTS_APP_B']
 with open(ants_file, 'r') as f:
     content = f.read()
 
-# Find onActivityStarted method and add return-void at the beginning
-# This prevents the 3-minute inactivity check from showing fullscreen ads
-
 pattern = r'(\.method\s+public\s+onActivityStarted\(Landroid/app/Activity;\)V.*?\.locals\s+\d+)'
 match = re.search(pattern, content, re.DOTALL)
 
 if match:
     old_section = match.group(0)
-    # Add return-void immediately after .locals declaration
     new_section = old_section + '\n\n    # Patched: Skip resume ad check\n    return-void\n'
     content = content.replace(old_section, new_section)
     print("Patched onActivityStarted() method in AntsApplication$b")
@@ -137,10 +146,196 @@ print("AntsApplication$b patching complete")
 PYTHON_SCRIPT2
 fi
 
+# Patch FreeCloudDialogFragment - make it dismiss immediately
+if [ -n "$FREE_CLOUD_DIALOG" ]; then
+    echo ""
+    echo ">>> Patching FreeCloudDialogFragment.smali (cloud popup)..."
+
+    python3 << 'PYTHON_FREE_CLOUD'
+import re
+import os
+
+dialog_file = os.environ['FREE_CLOUD_DIALOG']
+
+with open(dialog_file, 'r') as f:
+    content = f.read()
+
+# Patch onViewCreated to immediately dismiss
+pattern = r'(\.method\s+public\s+onViewCreated\(Landroid/view/View;Landroid/os/Bundle;\)V.*?\.locals\s+\d+)'
+match = re.search(pattern, content, re.DOTALL)
+
+if match:
+    old_section = match.group(0)
+    new_section = old_section + '''
+
+    # Patched: Immediately dismiss cloud popup
+    invoke-virtual {p0}, Landroidx/fragment/app/DialogFragment;->dismiss()V
+
+    return-void
+'''
+    content = content.replace(old_section, new_section)
+    print("Patched onViewCreated() in FreeCloudDialogFragment")
+else:
+    print("Warning: Could not find onViewCreated() method pattern")
+
+with open(dialog_file, 'w') as f:
+    f.write(content)
+PYTHON_FREE_CLOUD
+fi
+
+# Patch CloudIntroductionsActivity - make it finish immediately
+if [ -n "$CLOUD_INTRO_ACTIVITY" ]; then
+    echo ""
+    echo ">>> Patching CloudIntroductionsActivity.smali (cloud intro)..."
+
+    python3 << 'PYTHON_CLOUD_INTRO'
+import re
+import os
+
+activity_file = os.environ['CLOUD_INTRO_ACTIVITY']
+
+with open(activity_file, 'r') as f:
+    content = f.read()
+
+# Patch onCreate to immediately finish
+pattern = r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
+match = re.search(pattern, content, re.DOTALL)
+
+if match:
+    old_section = match.group(0)
+    new_section = old_section + '''
+
+    # Patched: Skip cloud introduction and finish immediately
+    invoke-virtual {p0}, Landroid/app/Activity;->finish()V
+
+    return-void
+'''
+    content = content.replace(old_section, new_section)
+    print("Patched onCreate() in CloudIntroductionsActivity")
+else:
+    print("Warning: Could not find onCreate() method pattern in CloudIntroductionsActivity")
+
+with open(activity_file, 'w') as f:
+    f.write(content)
+PYTHON_CLOUD_INTRO
+fi
+
+# Patch NoCloudIntroductionsActivity - make it finish immediately
+if [ -n "$NO_CLOUD_INTRO_ACTIVITY" ]; then
+    echo ""
+    echo ">>> Patching NoCloudIntroductionsActivity.smali (no cloud intro)..."
+
+    python3 << 'PYTHON_NO_CLOUD_INTRO'
+import re
+import os
+
+activity_file = os.environ['NO_CLOUD_INTRO_ACTIVITY']
+
+with open(activity_file, 'r') as f:
+    content = f.read()
+
+pattern = r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
+match = re.search(pattern, content, re.DOTALL)
+
+if match:
+    old_section = match.group(0)
+    new_section = old_section + '''
+
+    # Patched: Skip no-cloud introduction and finish immediately
+    invoke-virtual {p0}, Landroid/app/Activity;->finish()V
+
+    return-void
+'''
+    content = content.replace(old_section, new_section)
+    print("Patched onCreate() in NoCloudIntroductionsActivity")
+else:
+    print("Warning: Could not find onCreate() method pattern in NoCloudIntroductionsActivity")
+
+with open(activity_file, 'w') as f:
+    f.write(content)
+PYTHON_NO_CLOUD_INTRO
+fi
+
+# Patch CloudFeaturesActivity - make it finish immediately
+if [ -n "$CLOUD_FEATURES_ACTIVITY" ]; then
+    echo ""
+    echo ">>> Patching CloudFeaturesActivity.smali (cloud features)..."
+
+    python3 << 'PYTHON_CLOUD_FEATURES'
+import re
+import os
+
+activity_file = os.environ['CLOUD_FEATURES_ACTIVITY']
+
+with open(activity_file, 'r') as f:
+    content = f.read()
+
+pattern = r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
+match = re.search(pattern, content, re.DOTALL)
+
+if match:
+    old_section = match.group(0)
+    new_section = old_section + '''
+
+    # Patched: Skip cloud features and finish immediately
+    invoke-virtual {p0}, Landroid/app/Activity;->finish()V
+
+    return-void
+'''
+    content = content.replace(old_section, new_section)
+    print("Patched onCreate() in CloudFeaturesActivity")
+else:
+    print("Warning: Could not find onCreate() method pattern in CloudFeaturesActivity")
+
+with open(activity_file, 'w') as f:
+    f.write(content)
+PYTHON_CLOUD_FEATURES
+fi
+
+# Patch SmartAIPurchaseDialog - make it dismiss immediately
+if [ -n "$SMART_AI_DIALOG" ]; then
+    echo ""
+    echo ">>> Patching SmartAIPurchaseDialog.smali (AI purchase popup)..."
+
+    python3 << 'PYTHON_SMART_AI'
+import re
+import os
+
+dialog_file = os.environ['SMART_AI_DIALOG']
+
+with open(dialog_file, 'r') as f:
+    content = f.read()
+
+# Patch onViewCreated or show method
+pattern = r'(\.method\s+public\s+onViewCreated\(Landroid/view/View;Landroid/os/Bundle;\)V.*?\.locals\s+\d+)'
+match = re.search(pattern, content, re.DOTALL)
+
+if match:
+    old_section = match.group(0)
+    new_section = old_section + '''
+
+    # Patched: Immediately dismiss AI purchase popup
+    invoke-virtual {p0}, Landroidx/fragment/app/DialogFragment;->dismiss()V
+
+    return-void
+'''
+    content = content.replace(old_section, new_section)
+    print("Patched onViewCreated() in SmartAIPurchaseDialog")
+else:
+    print("Warning: Could not find onViewCreated() method pattern in SmartAIPurchaseDialog")
+
+with open(dialog_file, 'w') as f:
+    f.write(content)
+PYTHON_SMART_AI
+fi
+
 echo ""
 echo "=== Patching Complete ==="
 echo "The following modifications were made:"
 echo "  1. SplashActivity.g2() - bypasses splash screen ads"
-if [ -n "$ANTS_APP_B" ]; then
-    echo "  2. AntsApplication\$b.onActivityStarted() - disables resume ads"
-fi
+[ -n "$ANTS_APP_B" ] && echo "  2. AntsApplication\$b.onActivityStarted() - disables resume ads"
+[ -n "$FREE_CLOUD_DIALOG" ] && echo "  3. FreeCloudDialogFragment - auto-dismisses cloud popup"
+[ -n "$CLOUD_INTRO_ACTIVITY" ] && echo "  4. CloudIntroductionsActivity - skips cloud introduction"
+[ -n "$NO_CLOUD_INTRO_ACTIVITY" ] && echo "  5. NoCloudIntroductionsActivity - skips no-cloud intro"
+[ -n "$CLOUD_FEATURES_ACTIVITY" ] && echo "  6. CloudFeaturesActivity - skips cloud features screen"
+[ -n "$SMART_AI_DIALOG" ] && echo "  7. SmartAIPurchaseDialog - auto-dismisses AI purchase popup"
