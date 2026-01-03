@@ -56,15 +56,30 @@ jobs:
             echo "=== Extracted contents ==="
             ls -la extracted/
 
-            # Find base APK
-            if [ -f "extracted/base.apk" ]; then
-              echo "apk_file=extracted/base.apk" >> $GITHUB_OUTPUT
-            elif ls extracted/*.apk 1> /dev/null 2>&1; then
-              BASE_APK=$(ls extracted/*.apk | head -1)
-              echo "apk_file=$BASE_APK" >> $GITHUB_OUTPUT
-            else
-              echo "Error: No APK found in XAPK"
-              exit 1
+            # Find base APK from manifest.json or by pattern
+            if [ -f "extracted/manifest.json" ]; then
+              # Get base APK filename from manifest
+              BASE_APK_NAME=$(cat extracted/manifest.json | python3 -c "import sys, json; d=json.load(sys.stdin); print(next((s['file'] for s in d.get('split_apks', []) if s.get('id') == 'base'), ''))")
+              if [ -n "$BASE_APK_NAME" ] && [ -f "extracted/$BASE_APK_NAME" ]; then
+                echo "apk_file=extracted/$BASE_APK_NAME" >> $GITHUB_OUTPUT
+                echo "base_apk_name=$BASE_APK_NAME" >> $GITHUB_OUTPUT
+                echo "Found base APK from manifest: $BASE_APK_NAME"
+              fi
+            fi
+
+            # Fallback: look for common patterns
+            if [ -z "$BASE_APK_NAME" ]; then
+              if [ -f "extracted/base.apk" ]; then
+                echo "apk_file=extracted/base.apk" >> $GITHUB_OUTPUT
+                echo "base_apk_name=base.apk" >> $GITHUB_OUTPUT
+              elif ls extracted/com.*.apk 1> /dev/null 2>&1; then
+                BASE_APK=$(ls extracted/com.*.apk | grep -v config | head -1)
+                echo "apk_file=$BASE_APK" >> $GITHUB_OUTPUT
+                echo "base_apk_name=$(basename $BASE_APK)" >> $GITHUB_OUTPUT
+              else
+                echo "Error: No base APK found in XAPK"
+                exit 1
+              fi
             fi
           elif ls *.apk 1> /dev/null 2>&1; then
             APK_FILE=$(ls *.apk | head -1)
@@ -114,11 +129,12 @@ jobs:
           mkdir -p signed
 
           if [ "${{ steps.find-apk.outputs.is_xapk }}" == "true" ]; then
-            # Copy patched base and all split APKs to signing directory
-            cp patched-base.apk signed/base.apk
+            # Copy patched base APK with original name
+            BASE_APK_NAME="${{ steps.find-apk.outputs.base_apk_name }}"
+            cp patched-base.apk "signed/$BASE_APK_NAME"
 
-            # Copy split APKs (config.*, split_config.*, etc.)
-            for split in extracted/split_*.apk extracted/config.*.apk; do
+            # Copy all config/split APKs
+            for split in extracted/config.*.apk extracted/split_*.apk; do
               if [ -f "$split" ]; then
                 cp "$split" signed/
               fi
@@ -150,13 +166,32 @@ jobs:
           # Copy signed APKs
           cp signed/*.apk xapk-content/
 
-          # Copy manifest and icon from original XAPK if they exist
+          # Copy manifest.json from original XAPK (required for XAPK installers)
           if [ -f "extracted/manifest.json" ]; then
             cp extracted/manifest.json xapk-content/
+            echo "Copied manifest.json"
+          else
+            echo "Warning: No manifest.json found in original XAPK"
           fi
+
+          # Copy icon.png from original XAPK
           if [ -f "extracted/icon.png" ]; then
             cp extracted/icon.png xapk-content/
+            echo "Copied icon.png"
+          else
+            echo "Warning: No icon.png found in original XAPK"
           fi
+
+          # Copy any other metadata files that might exist
+          for file in extracted/*.json extracted/*.png extracted/*.jpg; do
+            if [ -f "$file" ] && [ "$(basename $file)" != "manifest.json" ] && [ "$(basename $file)" != "icon.png" ]; then
+              cp "$file" xapk-content/
+              echo "Copied additional file: $(basename $file)"
+            fi
+          done
+
+          echo "=== XAPK contents ==="
+          ls -la xapk-content/
 
           # Create the XAPK (ZIP with .xapk extension)
           cd xapk-content
