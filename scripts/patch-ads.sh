@@ -62,7 +62,7 @@ export NO_CLOUD_INTRO_ACTIVITY
 export CLOUD_FEATURES_ACTIVITY
 export SMART_AI_DIALOG
 
-# Patch SplashActivity.smali - modify g2() method to skip ads
+# Patch SplashActivity.smali - modify r2() method to skip ads
 echo ""
 echo ">>> Patching SplashActivity.smali (splash ads)..."
 
@@ -75,38 +75,44 @@ splash_file = os.environ['SPLASH_ACTIVITY']
 with open(splash_file, 'r') as f:
     content = f.read()
 
-# Find and patch the g2() method - this is the main ad orchestration method
-g2_pattern = r'(\.method\s+(?:private|public)?\s*(?:final\s+)?g2\(\)V.*?\.locals\s+\d+)'
-g2_match = re.search(g2_pattern, content, re.DOTALL)
+# Find and patch the r2() method - this is the main ad loading method
+# It loads TopOn/AnyThink and YdSDK ads
+r2_pattern = r'(\.method\s+private\s+final\s+r2\(\)V.*?\.locals\s+\d+)'
+r2_match = re.search(r2_pattern, content, re.DOTALL)
 
-if g2_match:
-    method_start = content.find('.method', g2_match.start())
-    method_end = content.find('.end method', g2_match.start())
+if r2_match:
+    method_start = content.find('.method', r2_match.start())
+    method_end = content.find('.end method', r2_match.start())
 
     if method_start != -1 and method_end != -1:
         old_method = content[method_start:method_end + len('.end method')]
         method_lines = old_method.split('\n')
         method_sig = method_lines[0]
 
+        # Replace with a method that immediately calls y2() to skip to main activity
         new_method = f'''{method_sig}
-    .locals 1
+    .locals 0
 
     # Patched: Skip all ad loading and go directly to main activity
-    const/4 v0, 0x1
-
-    invoke-direct {{p0, v0}}, Lcom/ants360/yicamera/activity/SplashActivity;->f2(Z)V
-
-    invoke-direct {{p0}}, Lcom/ants360/yicamera/activity/SplashActivity;->k2()V
+    invoke-direct {{p0}}, Lcom/ants360/yicamera/activity/SplashActivity;->y2()V
 
     return-void
 .end method'''
 
         content = content.replace(old_method, new_method)
-        print("Patched g2() method in SplashActivity")
+        print("Patched r2() method in SplashActivity - ads bypassed")
     else:
-        print("Warning: Could not find g2() method boundaries")
+        print("Warning: Could not find r2() method boundaries")
 else:
-    print("Warning: Could not find g2() method pattern")
+    # Try alternative method names (obfuscation may vary)
+    for method_name in ['q2', 's2', 't2', 'p2']:
+        alt_pattern = rf'(\.method\s+private\s+final\s+{method_name}\(\)V.*?\.locals\s+\d+)'
+        alt_match = re.search(alt_pattern, content, re.DOTALL)
+        if alt_match:
+            print(f"Found alternative ad method: {method_name}()")
+            break
+    else:
+        print("Warning: Could not find ad loading method pattern (r2 or alternatives)")
 
 with open(splash_file, 'w') as f:
     f.write(content)
@@ -197,8 +203,8 @@ activity_file = os.environ['CLOUD_INTRO_ACTIVITY']
 with open(activity_file, 'r') as f:
     content = f.read()
 
-# Patch onCreate to immediately finish
-pattern = r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
+# Patch onCreate to immediately finish (handles both public and protected)
+pattern = r'(\.method\s+(?:public|protected)\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
 match = re.search(pattern, content, re.DOTALL)
 
 if match:
@@ -234,7 +240,7 @@ activity_file = os.environ['NO_CLOUD_INTRO_ACTIVITY']
 with open(activity_file, 'r') as f:
     content = f.read()
 
-pattern = r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
+pattern = r'(\.method\s+(?:public|protected)\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
 match = re.search(pattern, content, re.DOTALL)
 
 if match:
@@ -270,7 +276,7 @@ activity_file = os.environ['CLOUD_FEATURES_ACTIVITY']
 with open(activity_file, 'r') as f:
     content = f.read()
 
-pattern = r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
+pattern = r'(\.method\s+(?:public|protected)\s+onCreate\(Landroid/os/Bundle;\)V.*?invoke-super\s+\{[^}]+\},\s*L[^;]+;->onCreate\(Landroid/os/Bundle;\)V)'
 match = re.search(pattern, content, re.DOTALL)
 
 if match:
