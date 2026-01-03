@@ -38,18 +38,19 @@ else
     echo "Found: $ANTS_APP_B"
 fi
 
+# Export variables for Python
+export SPLASH_ACTIVITY
+export ANTS_APP_B
+
 # Patch SplashActivity.smali - modify g2() method to skip ads
 echo ""
 echo ">>> Patching SplashActivity.smali (splash ads)..."
 
-# The g2() method handles ad loading. We replace its contents to skip directly to the fallback.
-# We need to find the method and replace its body with code that calls f2(true) and k2() then returns.
-
 python3 << 'PYTHON_SCRIPT'
 import re
-import sys
+import os
 
-splash_file = """$SPLASH_ACTIVITY"""
+splash_file = os.environ['SPLASH_ACTIVITY']
 
 with open(splash_file, 'r') as f:
     content = f.read()
@@ -107,8 +108,9 @@ if [ -n "$ANTS_APP_B" ]; then
 
     python3 << 'PYTHON_SCRIPT2'
 import re
+import os
 
-ants_file = """$ANTS_APP_B"""
+ants_file = os.environ['ANTS_APP_B']
 
 with open(ants_file, 'r') as f:
     content = f.read()
