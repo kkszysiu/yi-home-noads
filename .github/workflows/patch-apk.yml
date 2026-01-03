@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '*.xapk'
       - '*.apk'
       - 'scripts/**'
       - '.github/workflows/patch-apk.yml'
@@ -39,12 +40,41 @@ jobs:
         run: |
           wget https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar -O uber-apk-signer.jar
 
-      - name: Find APK file
+      - name: Find and extract XAPK/APK
         id: find-apk
         run: |
-          APK_FILE=$(ls *.apk | head -1)
-          echo "apk_file=$APK_FILE" >> $GITHUB_OUTPUT
-          echo "Found APK: $APK_FILE"
+          # Check for XAPK first, then APK
+          if ls *.xapk 1> /dev/null 2>&1; then
+            XAPK_FILE=$(ls *.xapk | head -1)
+            echo "Found XAPK: $XAPK_FILE"
+            echo "is_xapk=true" >> $GITHUB_OUTPUT
+
+            # Extract XAPK (it's a ZIP file)
+            mkdir -p extracted
+            unzip -o "$XAPK_FILE" -d extracted
+
+            echo "=== Extracted contents ==="
+            ls -la extracted/
+
+            # Find base APK
+            if [ -f "extracted/base.apk" ]; then
+              echo "apk_file=extracted/base.apk" >> $GITHUB_OUTPUT
+            elif ls extracted/*.apk 1> /dev/null 2>&1; then
+              BASE_APK=$(ls extracted/*.apk | head -1)
+              echo "apk_file=$BASE_APK" >> $GITHUB_OUTPUT
+            else
+              echo "Error: No APK found in XAPK"
+              exit 1
+            fi
+          elif ls *.apk 1> /dev/null 2>&1; then
+            APK_FILE=$(ls *.apk | head -1)
+            echo "Found APK: $APK_FILE"
+            echo "is_xapk=false" >> $GITHUB_OUTPUT
+            echo "apk_file=$APK_FILE" >> $GITHUB_OUTPUT
+          else
+            echo "Error: No XAPK or APK found"
+            exit 1
+          fi
 
       - name: Decompile APK
         run: |
@@ -77,13 +107,85 @@ jobs:
 
       - name: Rebuild APK
         run: |
-          apktool b decompiled -o patched.apk
+          apktool b decompiled -o patched-base.apk
 
-      - name: Sign APK
+      - name: Sign all APKs
         run: |
-          java -jar uber-apk-signer.jar -a patched.apk --allowResign
-          ls -la patched*.apk
-          mv patched-aligned-debugSigned.apk "yi-home-${{ steps.version.outputs.version_name }}-noads.apk"
+          mkdir -p signed
+
+          if [ "${{ steps.find-apk.outputs.is_xapk }}" == "true" ]; then
+            # Copy patched base and all split APKs to signing directory
+            cp patched-base.apk signed/base.apk
+
+            # Copy split APKs (config.*, split_config.*, etc.)
+            for split in extracted/split_*.apk extracted/config.*.apk; do
+              if [ -f "$split" ]; then
+                cp "$split" signed/
+              fi
+            done
+
+            echo "=== APKs to sign ==="
+            ls -la signed/
+
+            # Sign all APKs with the same key
+            java -jar uber-apk-signer.jar -a signed/ --allowResign --overwrite
+
+            echo "=== Signed APKs ==="
+            ls -la signed/
+          else
+            # Single APK mode
+            cp patched-base.apk signed/
+            java -jar uber-apk-signer.jar -a signed/patched-base.apk --allowResign
+            mv signed/patched-base-aligned-debugSigned.apk signed/yi-home-${{ steps.version.outputs.version_name }}-noads.apk
+          fi
+
+      - name: Package signed XAPK
+        if: steps.find-apk.outputs.is_xapk == 'true'
+        run: |
+          mkdir -p output
+
+          # Create new XAPK structure
+          mkdir -p xapk-content
+
+          # Copy signed APKs
+          cp signed/*.apk xapk-content/
+
+          # Copy manifest and icon from original XAPK if they exist
+          if [ -f "extracted/manifest.json" ]; then
+            cp extracted/manifest.json xapk-content/
+          fi
+          if [ -f "extracted/icon.png" ]; then
+            cp extracted/icon.png xapk-content/
+          fi
+
+          # Create the XAPK (ZIP with .xapk extension)
+          cd xapk-content
+          zip -r "../output/yi-home-${{ steps.version.outputs.version_name }}-noads.xapk" .
+          cd ..
+
+          # Also create a ZIP with individual APKs for adb install-multiple
+          cd signed
+          zip -r "../output/yi-home-${{ steps.version.outputs.version_name }}-noads-apks.zip" *.apk
+          cd ..
+
+          echo "=== Output files ==="
+          ls -la output/
+
+      - name: Prepare release files
+        id: release-files
+        run: |
+          mkdir -p release
+
+          if [ "${{ steps.find-apk.outputs.is_xapk }}" == "true" ]; then
+            cp output/*.xapk release/
+            cp output/*.zip release/
+            echo "files=release/*" >> $GITHUB_OUTPUT
+          else
+            cp signed/yi-home-*.apk release/
+            echo "files=release/*.apk" >> $GITHUB_OUTPUT
+          fi
+
+          ls -la release/
 
       - name: Check if release exists
         id: check_release
@@ -96,7 +198,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Release and Upload APK
+      - name: Create Release and Upload files
         if: steps.check_release.outputs.exists == 'false'
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
@@ -111,22 +213,28 @@ jobs:
           - Removed resume/background ads
 
           ### Installation
-          1. Uninstall the original Yi Home app (if installed)
-          2. Download the APK below
-          3. Install the APK (enable 'Install from unknown sources' if needed)
+
+          #### Option 1: Using XAPK Installer
+          1. Download the \`.xapk\` file
+          2. Use an XAPK installer app (like APKPure or SAI)
+          3. Install the package
+
+          #### Option 2: Using ADB
+          1. Download the \`.zip\` file containing individual APKs
+          2. Extract the ZIP
+          3. Run: \`adb install-multiple *.apk\`
 
           ---
           *Automatically patched by GitHub Actions*" \
-            yi-home-${{ steps.version.outputs.version_name }}-noads.apk
+            release/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update existing release
         if: steps.check_release.outputs.exists == 'true'
         run: |
-          # Delete old asset if exists and upload new one
           gh release upload "${{ steps.version.outputs.tag }}" \
-            yi-home-${{ steps.version.outputs.version_name }}-noads.apk \
+            release/* \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
