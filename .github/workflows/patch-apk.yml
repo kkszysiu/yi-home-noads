@@ -32,7 +32,7 @@ jobs:
       - name: Download APKEditor
         run: |
           wget https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar -O APKEditor.jar
-          java -jar APKEditor.jar -v
+          java -jar APKEditor.jar -version
 
       - name: Download uber-apk-signer
         run: |
