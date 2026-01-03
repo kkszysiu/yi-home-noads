@@ -29,197 +29,98 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install apktool
+      - name: Download APKEditor
         run: |
-          wget https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
-          chmod +x /usr/local/bin/apktool
-          wget https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.10.0.jar -O /usr/local/bin/apktool.jar
-          apktool --version
+          wget https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar -O APKEditor.jar
+          java -jar APKEditor.jar -v
 
       - name: Download uber-apk-signer
         run: |
           wget https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar -O uber-apk-signer.jar
 
-      - name: Find and extract XAPK/APK
-        id: find-apk
+      - name: Find input file
+        id: find-input
         run: |
-          # Check for XAPK first, then APK
           if ls *.xapk 1> /dev/null 2>&1; then
-            XAPK_FILE=$(ls *.xapk | head -1)
-            echo "Found XAPK: $XAPK_FILE"
+            INPUT_FILE=$(ls *.xapk | head -1)
+            echo "input_file=$INPUT_FILE" >> $GITHUB_OUTPUT
             echo "is_xapk=true" >> $GITHUB_OUTPUT
-
-            # Extract XAPK (it's a ZIP file)
-            mkdir -p extracted
-            unzip -o "$XAPK_FILE" -d extracted
-
-            echo "=== Extracted contents ==="
-            ls -la extracted/
-
-            # Find base APK from manifest.json or by pattern
-            if [ -f "extracted/manifest.json" ]; then
-              # Get base APK filename from manifest
-              BASE_APK_NAME=$(cat extracted/manifest.json | python3 -c "import sys, json; d=json.load(sys.stdin); print(next((s['file'] for s in d.get('split_apks', []) if s.get('id') == 'base'), ''))")
-              if [ -n "$BASE_APK_NAME" ] && [ -f "extracted/$BASE_APK_NAME" ]; then
-                echo "apk_file=extracted/$BASE_APK_NAME" >> $GITHUB_OUTPUT
-                echo "base_apk_name=$BASE_APK_NAME" >> $GITHUB_OUTPUT
-                echo "Found base APK from manifest: $BASE_APK_NAME"
-              fi
-            fi
-
-            # Fallback: look for common patterns
-            if [ -z "$BASE_APK_NAME" ]; then
-              if [ -f "extracted/base.apk" ]; then
-                echo "apk_file=extracted/base.apk" >> $GITHUB_OUTPUT
-                echo "base_apk_name=base.apk" >> $GITHUB_OUTPUT
-              elif ls extracted/com.*.apk 1> /dev/null 2>&1; then
-                BASE_APK=$(ls extracted/com.*.apk | grep -v config | head -1)
-                echo "apk_file=$BASE_APK" >> $GITHUB_OUTPUT
-                echo "base_apk_name=$(basename $BASE_APK)" >> $GITHUB_OUTPUT
-              else
-                echo "Error: No base APK found in XAPK"
-                exit 1
-              fi
-            fi
+            echo "Found XAPK: $INPUT_FILE"
           elif ls *.apk 1> /dev/null 2>&1; then
-            APK_FILE=$(ls *.apk | head -1)
-            echo "Found APK: $APK_FILE"
+            INPUT_FILE=$(ls *.apk | head -1)
+            echo "input_file=$INPUT_FILE" >> $GITHUB_OUTPUT
             echo "is_xapk=false" >> $GITHUB_OUTPUT
-            echo "apk_file=$APK_FILE" >> $GITHUB_OUTPUT
+            echo "Found APK: $INPUT_FILE"
           else
             echo "Error: No XAPK or APK found"
             exit 1
           fi
 
-      - name: Decompile APK
+      - name: Merge XAPK to single APK
+        if: steps.find-input.outputs.is_xapk == 'true'
         run: |
-          apktool d "${{ steps.find-apk.outputs.apk_file }}" -o decompiled -f
+          java -jar APKEditor.jar m -i "${{ steps.find-input.outputs.input_file }}" -o merged.apk -f
+          echo "Merged XAPK to single APK"
+
+      - name: Copy APK for processing
+        if: steps.find-input.outputs.is_xapk == 'false'
+        run: |
+          cp "${{ steps.find-input.outputs.input_file }}" merged.apk
+
+      - name: Decode APK
+        run: |
+          java -jar APKEditor.jar d -i merged.apk -o decoded -f
+          echo "=== Decoded structure ==="
+          ls -la decoded/
 
       - name: Extract version info
         id: version
         run: |
-          # Debug: show the apktool.yml versionInfo section
-          echo "=== apktool.yml versionInfo ==="
-          grep -A5 'versionInfo:' decompiled/apktool.yml
-          echo "==========================="
+          # Extract version from AndroidManifest.xml
+          if [ -f "decoded/AndroidManifest.xml" ]; then
+            VERSION_NAME=$(grep -oP 'android:versionName="[^"]*"' decoded/AndroidManifest.xml | head -1 | sed 's/android:versionName="//;s/"$//')
+            VERSION_CODE=$(grep -oP 'android:versionCode="[^"]*"' decoded/AndroidManifest.xml | head -1 | sed 's/android:versionCode="//;s/"$//')
+          fi
 
-          # Extract version using awk - more reliable parsing
-          VERSION_NAME=$(awk '/versionName:/ {gsub(/["\047]/, ""); print $2}' decompiled/apktool.yml | head -1)
-          VERSION_CODE=$(awk '/versionCode:/ {gsub(/["\047]/, ""); print $2}' decompiled/apktool.yml | head -1)
+          # Fallback to archive-info.json if available
+          if [ -z "$VERSION_NAME" ] && [ -f "decoded/archive-info.json" ]; then
+            VERSION_NAME=$(cat decoded/archive-info.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('versionName',''))" 2>/dev/null || echo "")
+            VERSION_CODE=$(cat decoded/archive-info.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('versionCode',''))" 2>/dev/null || echo "")
+          fi
+
+          # Default if still empty
+          VERSION_NAME=${VERSION_NAME:-"unknown"}
+          VERSION_CODE=${VERSION_CODE:-"0"}
 
           echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION_NAME}-noads" >> $GITHUB_OUTPUT
 
-          echo "Extracted Version Name: [$VERSION_NAME]"
-          echo "Extracted Version Code: [$VERSION_CODE]"
+          echo "Version Name: $VERSION_NAME"
+          echo "Version Code: $VERSION_CODE"
           echo "Tag: v${VERSION_NAME}-noads"
 
-      - name: Apply ad removal patches
+      - name: Apply patches
         run: |
           chmod +x scripts/patch-ads.sh
-          ./scripts/patch-ads.sh decompiled
+          ./scripts/patch-ads.sh decoded
 
       - name: Rebuild APK
         run: |
-          apktool b decompiled -o patched-base.apk
+          java -jar APKEditor.jar b -i decoded -o patched.apk -f
+          echo "=== Rebuilt APK ==="
+          ls -la patched.apk
 
-      - name: Sign all APKs
+      - name: Sign APK
         run: |
-          mkdir -p signed
+          java -jar uber-apk-signer.jar -a patched.apk --allowResign
+          ls -la patched*.apk
+          mv patched-aligned-debugSigned.apk "yi-home-${{ steps.version.outputs.version_name }}-noads.apk"
 
-          if [ "${{ steps.find-apk.outputs.is_xapk }}" == "true" ]; then
-            # Copy patched base APK with original name
-            BASE_APK_NAME="${{ steps.find-apk.outputs.base_apk_name }}"
-            cp patched-base.apk "signed/$BASE_APK_NAME"
-
-            # Copy all config/split APKs
-            for split in extracted/config.*.apk extracted/split_*.apk; do
-              if [ -f "$split" ]; then
-                cp "$split" signed/
-              fi
-            done
-
-            echo "=== APKs to sign ==="
-            ls -la signed/
-
-            # Sign all APKs with the same key
-            java -jar uber-apk-signer.jar -a signed/ --allowResign --overwrite
-
-            echo "=== Signed APKs ==="
-            ls -la signed/
-          else
-            # Single APK mode
-            cp patched-base.apk signed/
-            java -jar uber-apk-signer.jar -a signed/patched-base.apk --allowResign
-            mv signed/patched-base-aligned-debugSigned.apk signed/yi-home-${{ steps.version.outputs.version_name }}-noads.apk
-          fi
-
-      - name: Package signed XAPK
-        if: steps.find-apk.outputs.is_xapk == 'true'
-        run: |
-          mkdir -p output
-
-          # Create new XAPK structure
-          mkdir -p xapk-content
-
-          # Copy signed APKs
-          cp signed/*.apk xapk-content/
-
-          # Copy manifest.json from original XAPK (required for XAPK installers)
-          if [ -f "extracted/manifest.json" ]; then
-            cp extracted/manifest.json xapk-content/
-            echo "Copied manifest.json"
-          else
-            echo "Warning: No manifest.json found in original XAPK"
-          fi
-
-          # Copy icon.png from original XAPK
-          if [ -f "extracted/icon.png" ]; then
-            cp extracted/icon.png xapk-content/
-            echo "Copied icon.png"
-          else
-            echo "Warning: No icon.png found in original XAPK"
-          fi
-
-          # Copy any other metadata files that might exist
-          for file in extracted/*.json extracted/*.png extracted/*.jpg; do
-            if [ -f "$file" ] && [ "$(basename $file)" != "manifest.json" ] && [ "$(basename $file)" != "icon.png" ]; then
-              cp "$file" xapk-content/
-              echo "Copied additional file: $(basename $file)"
-            fi
-          done
-
-          echo "=== XAPK contents ==="
-          ls -la xapk-content/
-
-          # Create the XAPK (ZIP with .xapk extension)
-          cd xapk-content
-          zip -r "../output/yi-home-${{ steps.version.outputs.version_name }}-noads.xapk" .
-          cd ..
-
-          # Also create a ZIP with individual APKs for adb install-multiple
-          cd signed
-          zip -r "../output/yi-home-${{ steps.version.outputs.version_name }}-noads-apks.zip" *.apk
-          cd ..
-
-          echo "=== Output files ==="
-          ls -la output/
-
-      - name: Prepare release files
-        id: release-files
+      - name: Prepare release
         run: |
           mkdir -p release
-
-          if [ "${{ steps.find-apk.outputs.is_xapk }}" == "true" ]; then
-            cp output/*.xapk release/
-            cp output/*.zip release/
-            echo "files=release/*" >> $GITHUB_OUTPUT
-          else
-            cp signed/yi-home-*.apk release/
-            echo "files=release/*.apk" >> $GITHUB_OUTPUT
-          fi
-
+          mv "yi-home-${{ steps.version.outputs.version_name }}-noads.apk" release/
           ls -la release/
 
       - name: Check if release exists
@@ -233,7 +134,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Release and Upload files
+      - name: Create Release
         if: steps.check_release.outputs.exists == 'false'
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
@@ -246,18 +147,14 @@ jobs:
           ### Changes
           - Removed splash screen ads
           - Removed resume/background ads
+          - Removed cloud plan popups and introductions
+          - Removed AI purchase dialogs
 
           ### Installation
-
-          #### Option 1: Using XAPK Installer
-          1. Download the \`.xapk\` file
-          2. Use an XAPK installer app (like APKPure or SAI)
-          3. Install the package
-
-          #### Option 2: Using ADB
-          1. Download the \`.zip\` file containing individual APKs
-          2. Extract the ZIP
-          3. Run: \`adb install-multiple *.apk\`
+          1. Uninstall the original Yi Home app (if installed)
+          2. Download the APK below
+          3. Enable 'Install from unknown sources' if needed
+          4. Install the APK
 
           ---
           *Automatically patched by GitHub Actions*" \
