@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Build artifacts
+decompiled/
+patched-*.apk
+*-aligned-*.apk
+*-signed.apk
+
+# Tools downloaded during build
+*.jar
+!scripts/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/

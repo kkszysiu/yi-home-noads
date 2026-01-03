@@ -1,0 +1,131 @@
+name: Patch Yi Home APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '*.apk'
+      - 'scripts/**'
+      - '.github/workflows/patch-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install apktool
+        run: |
+          wget https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
+          chmod +x /usr/local/bin/apktool
+          wget https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.10.0.jar -O /usr/local/bin/apktool.jar
+          apktool --version
+
+      - name: Download uber-apk-signer
+        run: |
+          wget https://github.com/nicetry69/uber-apk-signer-1.3.0/raw/master/uber-apk-signer-1.3.0.jar -O uber-apk-signer.jar
+
+      - name: Find APK file
+        id: find-apk
+        run: |
+          APK_FILE=$(ls *.apk | head -1)
+          echo "apk_file=$APK_FILE" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK_FILE"
+
+      - name: Decompile APK
+        run: |
+          apktool d "${{ steps.find-apk.outputs.apk_file }}" -o decompiled -f
+
+      - name: Extract version info
+        id: version
+        run: |
+          # Extract version from apktool.yml
+          VERSION_NAME=$(grep 'versionName:' decompiled/apktool.yml | sed "s/.*versionName: '\(.*\)'/\1/" | tr -d "'")
+          VERSION_CODE=$(grep 'versionCode:' decompiled/apktool.yml | sed "s/.*versionCode: '\(.*\)'/\1/" | tr -d "'")
+
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION_NAME}-noads" >> $GITHUB_OUTPUT
+
+          echo "Version Name: $VERSION_NAME"
+          echo "Version Code: $VERSION_CODE"
+          echo "Tag: v${VERSION_NAME}-noads"
+
+      - name: Apply ad removal patches
+        run: |
+          chmod +x scripts/patch-ads.sh
+          ./scripts/patch-ads.sh decompiled
+
+      - name: Rebuild APK
+        run: |
+          apktool b decompiled -o patched-unsigned.apk
+
+      - name: Sign APK
+        run: |
+          java -jar uber-apk-signer.jar -a patched-unsigned.apk --allowResign
+          mv patched-unsigned-aligned-debugSigned.apk yi-home-${{ steps.version.outputs.version_name }}-noads.apk
+
+      - name: Check if release exists
+        id: check_release
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release and Upload APK
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Yi Home ${{ steps.version.outputs.version_name }} (No Ads)" \
+            --notes "## Yi Home App - Ad-Free Version
+
+          **Version:** ${{ steps.version.outputs.version_name }}
+          **Version Code:** ${{ steps.version.outputs.version_code }}
+
+          ### Changes
+          - Removed splash screen ads
+          - Removed resume/background ads
+
+          ### Installation
+          1. Uninstall the original Yi Home app (if installed)
+          2. Download the APK below
+          3. Install the APK (enable 'Install from unknown sources' if needed)
+
+          ---
+          *Automatically patched by GitHub Actions*" \
+            yi-home-${{ steps.version.outputs.version_name }}-noads.apk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update existing release
+        if: steps.check_release.outputs.exists == 'true'
+        run: |
+          # Delete old asset if exists and upload new one
+          gh release upload "${{ steps.version.outputs.tag }}" \
+            yi-home-${{ steps.version.outputs.version_name }}-noads.apk \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Output release URL
+        run: |
+          echo "Release created/updated at:"
+          echo "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
