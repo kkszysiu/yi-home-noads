@@ -53,16 +53,21 @@ jobs:
       - name: Extract version info
         id: version
         run: |
-          # Extract version from apktool.yml
-          VERSION_NAME=$(grep 'versionName:' decompiled/apktool.yml | sed "s/.*versionName: '\(.*\)'/\1/" | tr -d "'")
-          VERSION_CODE=$(grep 'versionCode:' decompiled/apktool.yml | sed "s/.*versionCode: '\(.*\)'/\1/" | tr -d "'")
+          # Debug: show the apktool.yml versionInfo section
+          echo "=== apktool.yml versionInfo ==="
+          grep -A5 'versionInfo:' decompiled/apktool.yml
+          echo "==========================="
+
+          # Extract version using awk - more reliable parsing
+          VERSION_NAME=$(awk '/versionName:/ {gsub(/["\047]/, ""); print $2}' decompiled/apktool.yml | head -1)
+          VERSION_CODE=$(awk '/versionCode:/ {gsub(/["\047]/, ""); print $2}' decompiled/apktool.yml | head -1)
 
           echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "tag=v${VERSION_NAME}-noads" >> $GITHUB_OUTPUT
 
-          echo "Version Name: $VERSION_NAME"
-          echo "Version Code: $VERSION_CODE"
+          echo "Extracted Version Name: [$VERSION_NAME]"
+          echo "Extracted Version Code: [$VERSION_CODE]"
           echo "Tag: v${VERSION_NAME}-noads"
 
       - name: Apply ad removal patches
