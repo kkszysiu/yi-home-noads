@@ -72,12 +72,13 @@ jobs:
 
       - name: Rebuild APK
         run: |
-          apktool b decompiled -o patched-unsigned.apk
+          apktool b decompiled -o patched.apk
 
       - name: Sign APK
         run: |
-          java -jar uber-apk-signer.jar -a patched-unsigned.apk --allowResign
-          mv patched-unsigned-aligned-debugSigned.apk yi-home-${{ steps.version.outputs.version_name }}-noads.apk
+          java -jar uber-apk-signer.jar -a patched.apk --allowResign
+          ls -la patched*.apk
+          mv patched-aligned-debugSigned.apk "yi-home-${{ steps.version.outputs.version_name }}-noads.apk"
 
       - name: Check if release exists
         id: check_release
